@@ -141,7 +141,7 @@ var_list<-unique(training_clean2_long$var)
 dir.create("plots_raw")
 
 ```
-We visually explored the relationship between the **covariates** and **classe**. The loop used to generate the plots is below, and the plots are stored here (hyperlink). We see that the variables **raw_timestamp_part_1**, **raw_timestamp_part_2** and **cvtd_timestamp** are evenly distributed across class. Plot 1 presents **timestamp_part_1** as an example.  We remove them from the analysis.
+We visually explored the relationship between the **covariates** and **classe**. The loop used to generate the plots is below, and the plots are stored [here](https://github.com/pcordbul83/practicalmachinelearning/tree/master/plots_raw). We see that the variables **raw_timestamp_part_1**, **raw_timestamp_part_2** and **cvtd_timestamp** are evenly distributed across class. Plot 1 presents **timestamp_part_1** as an example.  We remove them from the analysis.
 
 ```{r, include=FALSE}
 #This is the same code as below, but this will be exacuted, the other is just to show in the Rmarkdown
