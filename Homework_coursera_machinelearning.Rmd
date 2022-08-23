@@ -1,0 +1,355 @@
+---
+title: "Practical Machine Learning - Course Project"
+author: "Pablo Cordova"
+date: '2022-08-06'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls())
+
+```
+
+## Assignement 
+
+Using the data sect from [this project](http://groupware.les.inf.puc-rio.br/har), we need to predict if people performed barbell lifts correctly.
+
+## Packages
+
+For this assignment we will use the following packages:
+
+*	**Tidyverse**
+*	**caret**
+* **gmb**
+* **readr**
+* **kableExtra**
+* **corrplot**
+* **lubridate**
+* **fastDummies**
+
+```{r, include=FALSE}
+library(tidyverse);library(caret);library(readr);library(kableExtra);library(corrplot);
+library(lubridate);library(plotly);library(fastDummies);library(rattle);library(gbm)
+```
+
+
+## The data
+
+We have a [training]( https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv) and a [test](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv) dataset that have been provided with the assignement and loaded.
+
+```{r, include=FALSE}
+training<-read_csv("pml-training.csv")
+test<-read_csv("pml-testing.csv")
+
+```
+
+### Checking and cleaning the data
+
+#### Empty values
+
+We run a few checks on the **training** dataset.
+
+* Empty variables: there was no variable completely empty.
+* Empty rows: there are no empty rows.
+
+However,  there are **100 variables with  97% of NA values**. We removed them from the training and test datasets (Annex 1 has the complete list of the variables removed)
+
+
+
+```{r, include=FALSE}
+empty_columns <- tibble(empty=colSums(is.na(training) | training == "") == nrow(training))%>%
+  filter(empty=="TRUE")
+
+test_emptycols<-training%>%select(-c("classe"))
+test_emptycols[!apply(test_emptycols == "", 1, all),]
+
+na_count <-tibble(var=names(training),
+                  "percentage of NAs"=sapply(training, 
+                               function(y) sum(length(which(is.na(y)))))/nrow(training))%>%
+  filter(`percentage of NAs`>0.6)
+
+table_annex<-na_count%>%kbl()%>%kable_minimal()
+
+training_clean<-training%>%select(-na_count$var)
+test_clean<-test%>%select(-na_count$var)
+
+```
+
+#### Variables Class
+
+We explore the class of the variables, and we see that only four are not numeric.   
+
+```{r, include=FALSE}
+class_data<-tibble(variable=names(training_clean),class=sapply(training_clean,class))
+calls_not_numeric<-class_data%>%filter(class!="numeric")
+not_numeric_print<-calls_not_numeric[,1]%>%t()%>%
+  kbl()%>%kable_minimal()
+
+training_clean2<-training_clean%>%
+  mutate_at(c("user_name","new_window","classe"),as.factor)%>%
+  mutate(cvtd_timestamp=as_datetime(cvtd_timestamp,format="%d/%m/%Y %H:%M"))
+
+test_clean2<-test_clean%>%
+  mutate_at(c("user_name","new_window"),as.factor)%>%
+  mutate(cvtd_timestamp=as_datetime(cvtd_timestamp,format="%d/%m/%Y %H:%M"))
+
+```
+
+```{r, echo=FALSE}
+not_numeric_print
+```
+
+Three of these variables are factors: **user_name**, **new_window**, **classe**. The **cvtd_timestamp** is a time and date. We will apply these modifications in the datasets, i.e. move these variables from character to factor or date and time.
+
+```{r, include=FALSE}
+check_names<-tibble(train=names(training_clean2),test=names(test_clean2))%>%
+  mutate(equal=ifelse(train==test,1,0))%>%filter(equal==0)
+```
+
+#### Correlation between variables
+
+```{r, include=FALSE}
+
+training_numeric<-training_clean2%>%
+  select(-c("user_name", "new_window", "classe","cvtd_timestamp","...1"))
+training_numeric_ref<-training_numeric
+
+colnames(training_numeric_ref)<-c(1:55)
+
+names_vars<-tibble(ref=c(1:55),names(training_numeric))
+
+correlation_matrix<-cor(training_numeric)
+
+
+
+```
+We first explore the correlation across covariates. In Annex 2, you can find a correlation matrix plot (the higher the intensity of the color, the higher the correlation).  We see that the variance of exercises has a high correlation among them (gyros_dumbell_x is correlated with gyros_dumbell_y and gyros_dumbell_z)
+
+#### Relationship between covariates and classe
+
+```{r, include= FALSE}
+training_clean2_long<-training_numeric%>%
+  mutate(classe=training_clean2$classe)%>%
+  select(classe,everything())%>%
+  gather(var,value,2:56)
+
+training_clean2_long[is.na(training_clean2_long)]<-0
+
+
+var_list<-unique(training_clean2_long$var)
+dir.create("plots_raw")
+
+```
+We visually explored the relationship between the **covariates** and **classe**. The loop used to generate the plots is below, and the plots are stored here (hyperlink). We see that the variables **raw_timestamp_part_1**, **raw_timestamp_part_2** and **cvtd_timestamp** are evenly distributed across class. Plot 1 presents **timestamp_part_1** as an example.  We remove them from the analysis.
+
+```{r, include=FALSE}
+#This is the same code as below, but this will be exacuted, the other is just to show in the Rmarkdown
+for(i in 1:length(var_list)){
+  
+  temp<-training_clean2%>%select(classe,var_list[i])%>%
+    ggplot(aes(classe,get(var_list[i]),color=classe))+
+  geom_jitter(alpha=0.3,size=2)+geom_point(color="black")+geom_boxplot(alpha=0.3)+
+    labs(title=var_list[i])+theme(axis.title.y=element_blank())
+  assign(paste0("plot_",var_list[i]),temp)
+  invisible(ggsave(paste0(".//plots_raw//plot_",var_list[i],".jpg"),temp))
+}
+```
+
+
+```{r,warning=FALSE,results='hide',message=FALSE,eval=FALSE}
+for(i in 1:length(var_list)){
+  
+  temp<-training_clean2%>%select(classe,var_list[i])%>%
+    ggplot(aes(classe,get(var_list[i]),color=classe))+
+  geom_jitter(alpha=0.3,size=2)+geom_point(color="black")+geom_boxplot(alpha=0.3)+
+    labs(title=var_list[i])+theme(axis.title.y=element_blank())
+  assign(paste0("plot_",var_list[i]),temp)
+  invisible(ggsave(paste0(".//plots_raw//plot_",var_list[i],".jpg"),temp))
+}
+```
+
+```{r,include=FALSE}
+  temp<-training_clean2%>%select(classe,cvtd_timestamp)%>%
+    ggplot(aes(classe,cvtd_timestamp,color=classe))+
+  geom_jitter(alpha=0.3,size=2)+geom_point(color="black")+geom_boxplot(alpha=0.3)+
+    labs(title="cvtd_timestamp")+theme(axis.title.y=element_blank())
+
+   assign(paste0("plot_cvtd_timestamp"),temp)
+  invisible(ggsave(paste0(".//plots_raw//plot_cvtd_timestamp.jpg"),temp))
+```
+
+```{r,echo=FALSE}
+plot_cvtd_timestamp
+```
+
+```{r, include=FALSE}
+training_clean3<-training_clean2%>%
+  select(-c("raw_timestamp_part_1","raw_timestamp_part_2",
+            "cvtd_timestamp"))
+
+test_clean3<-test_clean2%>%
+  select(-c("raw_timestamp_part_1","raw_timestamp_part_2",
+            "cvtd_timestamp"))
+
+```
+
+#### Removing zero covariates
+
+```{r, include=FALSE}
+zero_covariates<-tibble(var=names(training_clean3),
+                        nearZeroVar(training_clean3,saveMetrics=TRUE))%>%
+  filter(nzv=="TRUE")
+
+zero_covariates_table<-zero_covariates%>%kbl()%>%kable_minimal()
+
+
+
+```
+We check for zero covariates. We see that the variable **new_window** is a near zero var covariate, so we remove it from the dataset.
+```{r,echo=FALSE}
+zero_covariates_table
+```
+
+```{r,include=FALSE}
+training_clean4<-training_clean3%>%
+  select(-c("new_window"))
+
+test_clean4<-test_clean3%>%
+ select(-c("new_window"))
+```
+
+#### Removing the index and the user
+
+Finally, we remove the column **“…1”** - which is just the row index - and the **user_name**.
+
+```{r,include=FALSE}
+training_clean5<-training_clean4%>%
+  select(-c("...1","user_name","num_window"))
+
+test_clean5<-test_clean4%>%
+ select(-c("...1","user_name","num_window"))
+```
+
+#### Final Datasets
+
+Finally, after checking, we see that the **classe** variable is not present in the testing dataset, it has been replaced with a variable **problem_id**
+
+We end with datasets of the following dimensions 
+
+* **Traning datasets**:`r dim(training_clean5)[1]` observations and `r dim(training_clean5)[2]` variables.
+* **Test datasets**:`r dim(test_clean5)[1]` observations and `r dim(test_clean5)[2]` variables.
+
+## Cross Validation
+
+For cross-validation, we will split the data into two datasets according to the following percentages:
+
+*	Training dataset: 70%.
+*	Testing dataset: 30%.
+
+
+To avoid any confusion, we rename the original **testing dataset** (the one with 20 observations) to **final validation dataset**
+
+The code to split the data set is below:
+
+```{r, warning=FALSE}
+#we create the training data set with 60% of the observations
+split1<-createDataPartition(y=training_clean5$classe,p=0.7,list=FALSE)
+train<-training_clean5[split1,]
+test<-training_clean5[-split1,]
+
+```
+
+## The models
+
+We will use the following models:
+
+*	**Trees**
+*	**Random forest**
+*	**Gradient Boosted Trees**
+*	**Model based prediction**
+
+For each of the models, we generated predicted values and generate the confusion matrix.
+
+
+```{r}
+# we create the model 
+set.seed(1234)
+control <- trainControl(method="cv", number=3, verboseIter=F) 
+
+## decision tree
+mod_trees <- train(classe~., data=train, method="rpart", 
+                   trControl = control, tuneLength = 5)
+
+pred_trees<-predict(mod_trees,test)
+conf_trees<-confusionMatrix(pred_trees,factor(test$classe))
+
+## random forest
+mod_rf <- train(classe~., data=train, method="rf", 
+                   trControl = control, tuneLength = 5)
+
+pred_rf<-predict(mod_rf,test)
+conf_rf<-confusionMatrix(pred_rf,factor(test$classe))
+
+
+## Boosting with trees
+mod_gbm <- train(classe~., data=train, method="gbm", 
+                   trControl = control, tuneLength = 5,verbose=FALSE)
+
+pred_gbm<-predict(mod_gbm,test)
+conf_gbm<-confusionMatrix(pred_gbm,factor(test$classe))
+
+
+##model based prediction
+mod_lda<- train(classe~., data=train, method="lda")
+pred_lda<-predict(mod_lda,test)
+conf_lda<-confusionMatrix(pred_lda,factor(test$classe))
+
+```
+
+### Comparing accuracys
+
+```{r, include=FALSE}
+accuracys<-tibble(model=c("Decision Tree","Random Forest","Boosting with trees",
+                          "Model-based prediction"),
+                  accuracy=c(conf_trees$overall[1],conf_rf$overall[1],conf_gbm$overall[1],
+                             conf_lda$overall[1]))%>%arrange(desc(accuracy))
+
+
+accuracys_table<-accuracys%>%kbl()%>%kable_minimal()%>%row_spec(1,background = "green",color="white",bold=TRUE)
+```
+```{r,echo=FALSE}
+accuracys_table
+
+```
+We see that the model with the highest accuracy is **`r accuracys[1,1]`** with an accuracy of  **`r paste0(round(accuracys[1,2]*100,1),"%")`**. This is the model we will use against the validation set.
+
+## Predictions on the validation set
+
+```{r, include=FALSE}
+val_rf<-tibble(prediciton=predict(mod_rf,test_clean5))%>%t()
+
+val_rf_table<-val_rf%>%kbl()%>%kable_minimal()
+
+```
+Below are our predictions of the 20 observations.
+
+```{r, echo=FALSE}
+val_rf_table
+```
+
+
+## ANNEX
+
+### ANNEX 1: Variables with almonst only NA
+
+```{r,echo=FALSE}
+table_annex
+```
+
+### ANNEX 2: Correlation matrix
+
+```{r, echo=FALSE}
+corrplot(correlation_matrix,method = "circle",tl.cex = 0.4)
+```
+
